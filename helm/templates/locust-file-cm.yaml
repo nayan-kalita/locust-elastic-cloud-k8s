@@ -8,11 +8,9 @@ data:
     import os
     from random import randint
     import datetime
-
     import gevent
     import locust
     from locust import TaskSet, task, HttpLocust, events
-
     from tools.backend_base import DBForwarder
     from tools.detectors import *
     from tools.elastic import ElasticSearchAdapter
@@ -93,5 +91,4 @@ data:
         task_set = TestBehaviour
         min_wait = 500
         max_wait = 900
-{{- end }}
 
