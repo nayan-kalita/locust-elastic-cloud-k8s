@@ -1,0 +1,66 @@
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  annotations:
+    deployment.kubernetes.io/revision: "1"
+  labels:
+    role: locust-master
+  name: locust-master
+spec:
+  replicas: 
+  selector:
+    matchLabels:
+      role: locust-master
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 1
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        role: locust-master
+    spec:
+      containers:
+      - image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+        imagePullPolicy: "{{ .Values.image.pullPolicy }}"
+        name: locust-master
+        env:
+          - name: ATTACKED_HOST
+            value: {{ .Values.AttackHost }}
+          - name: LOCUST_MODE
+            value: locust-master
+          - name: LOCUST_OPTS
+            value: "--csv=example"
+          - name: QUIET_MODE
+            value: "${QUIET_MODE:-false}"
+          - name: LOCUST_MASTER_BIND_PORT
+            value: "5557"
+          - name: ES_CONNECTIONS
+            valueFrom:
+              configMapKeyRef:
+                name: locust-es-cm
+                key: ES_CONNECTIONS
+        volumeMounts:
+          - mountPath: /locust
+            name: locust-scripts
+        ports:
+        - containerPort: 5557
+          name: comm
+        - containerPort: 5558
+          name: comm-plus-1
+        - containerPort: 8089
+          name: web-ui
+        resources: {}
+        terminationMessagePath: /dev/termination-log
+        terminationMessagePolicy: File
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      schedulerName: default-scheduler
+      securityContext: {}
+      nodeSelector: {}
+      terminationGracePeriodSeconds: 30
+      volumes:
+      - name: locust-scripts
+        configMap:
+         name: scripts-cm

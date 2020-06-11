@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scripts-cm
+data:
+  locustfile.py: |
+    import json
+    import os
+    from random import randint
+    import datetime
+
+    import gevent
+    import locust
+    from locust import TaskSet, task, HttpLocust, events
+
+    from tools.backend_base import DBForwarder
+    from tools.detectors import *
+    from tools.elastic import ElasticSearchAdapter
+
+    ##################
+    ES_CONNECTIONS = os.getenv("ES_CONNECTIONS", "127.0.0.1:9200").split(sep=",")
+    QUIET_MODE = True if os.getenv("QUIET_MODE", "true").lower() in ['1', 'true', 'yes'] else False
+
+
+    def log(message):
+        if not QUIET_MODE:
+            print(message)
+
+
+    # configuration for the master
+    if is_locustfile_ran_on_master() or is_locustfile_ran_on_standalone():
+        def report_data_producer(client_id, data):
+            global forwarder
+            timestamp = datetime.datetime.utcnow().isoformat()
+            total_stat = {"@timestamp": timestamp, "testname": "{{ .Values.locust.testname }}", "type": "custom", "source": client_id, "cc_user": data["user_count"]}
+            forwarder.add(total_stat)
+
+        print("starting external db forwarder on master")
+        forwarder = DBForwarder()
+
+        ea = ElasticSearchAdapter(ES_CONNECTIONS)
+        forwarder.add_backend(ea)
+        gevent.spawn(forwarder.run)
+
+        print("adding slave_report hook")
+        locust.events.slave_report += report_data_producer
+
+    ###
+    #
+    # configuration for the slave
+    if is_locustfile_ran_on_slave() or is_test_ran_on_standalone():
+        print("starting external db forwarder on slave")
+        forwarder = DBForwarder()
+        ea = ElasticSearchAdapter(ES_CONNECTIONS)
+        forwarder.add_backend(ea)
+        gevent.spawn(forwarder.run)
+
+
+        def additional_success_handler(request_type, name, response_time, response_length, **kwargs):
+            """ additional request success handler to log statistics """
+            timestamp = datetime.datetime.utcnow().isoformat()
+            OK_TEMPLATE = '{"request_type":"%s", "name":"%s", "result":"%s", ' \
+                          '"response_time":%s, "response_length":%s, "other":%s}'
+
+            json_string = OK_TEMPLATE % (request_type, name, "OK", response_time, response_length, json.dumps(kwargs))
+            message = {"@timestamp": timestamp, "testname": "{{ .Values.locust.testname }}", "type": "success", "payload": json.loads(json_string)}
+            forwarder.add(message)
+
+
+        def additional_failure_handler(request_type, name, response_time, exception, **kwargs):
+            """ additional request failure handler to log statistics """
+            timestamp = datetime.datetime.utcnow().isoformat()
+            ERR_TEMPLATE = '{"request_type":"%s", "name":"%s", "result":"%s", ' \
+                           '"response_time":%s, "exception":"%s", "other":%s}'
+            json_string = ERR_TEMPLATE % (request_type, name, "ERR", response_time, exception, json.dumps(kwargs))
+            message = {"@timestamp": timestamp, "testname": "{{ .Values.locust.testname }}", "type": "error", "payload": json.loads(json_string)}
+            forwarder.add(message)
+
+
+        events.request_success += additional_success_handler
+        events.request_failure += additional_failure_handler
+
+
+    class TestBehaviour(TaskSet):
+        @task
+        def task1(self):
+            self.client.get("/mercurywelcome.php")
+            self.client.get("/mercurysignon.php")
+            self.client.get("/mercuryregister.php")
+
+
+    class TestUser(HttpLocust):
+        task_set = TestBehaviour
+        min_wait = 500
+        max_wait = 900
+{{- end }}
+
